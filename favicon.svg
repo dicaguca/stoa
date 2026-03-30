@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="stoa-top-gradient" x1="16" y1="12" x2="48" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a66"/>
+      <stop offset="0.5" stop-color="#ff4f8b"/>
+      <stop offset="1" stop-color="#ff9d6c"/>
+    </linearGradient>
+    <linearGradient id="stoa-base-gradient" x1="16" y1="36" x2="48" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7b68ee"/>
+      <stop offset="1" stop-color="#6ddab5"/>
+    </linearGradient>
+  </defs>
+  <path
+    d="M16 24L32 10L48 24"
+    fill="none"
+    stroke="url(#stoa-top-gradient)"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="9"/>
+  <path
+    d="M20 38H44"
+    fill="none"
+    stroke="url(#stoa-base-gradient)"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="9"/>
+  <path
+    d="M16 52H48"
+    fill="none"
+    stroke="url(#stoa-base-gradient)"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="9"/>
+</svg>
