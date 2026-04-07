@@ -1762,7 +1762,15 @@ body.sidebar-resizing {
 }
 
 .modal-date-cell.today {
-    border-color: #eceff5;
+    border-color: var(--primary);
+    background: #fff;
+    color: var(--primary);
+    font-weight: 700;
+}
+
+.modal-date-cell.selected.today {
+    background: rgba(123, 104, 238, 0.12);
+    border-color: rgba(123, 104, 238, 0.28);
 }
 
 .modal-date-cell.recurring-future {
