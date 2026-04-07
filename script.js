@@ -52,7 +52,7 @@ const RECURRENCE_ORDINAL_LABELS = {
     '4': '4th',
     'last': 'last'
 };
-const CLOUD_STORAGE_API_URL = 'https://sadhanas-api.di-guzmanc.workers.dev';
+const CLOUD_STORAGE_API_URL = 'https://api.sadhanas.app';
 const APP_STORAGE_KEY = 'stoa:data';
 const LOCAL_STORAGE_KEY = 'stoa:backup';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'stoa:sidebar-width';
