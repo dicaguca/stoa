@@ -41,6 +41,8 @@ body {
 /* --- SIDEBAR --- */
 .sidebar {
     width: 240px;
+    min-width: 200px;
+    max-width: 420px;
     background-color: var(--bg-sidebar);
     color: var(--text-sidebar);
     display: flex;
@@ -48,6 +50,39 @@ body {
     padding: 22px 0 0 0;
     flex-shrink: 0;
     overflow: hidden;
+    position: relative;
+}
+
+.sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 5;
+    touch-action: none;
+}
+
+.sidebar-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 2px;
+    height: 100%;
+    background: transparent;
+    transition: background 0.2s ease;
+}
+
+.sidebar-resize-handle:hover::after,
+body.sidebar-resizing .sidebar-resize-handle::after {
+    background: rgba(255, 255, 255, 0.22);
+}
+
+body.sidebar-resizing {
+    cursor: col-resize;
+    user-select: none;
 }
 
 .brand { 
@@ -141,6 +176,12 @@ body {
     justify-content: space-between;
     align-items: center;
     border-left: 3px solid transparent; /* ClickUp style indicator */
+    min-width: 0;
+}
+
+.nav-item > div {
+    min-width: 0;
+    overflow: hidden;
 }
 
 .nav-item:hover {
@@ -159,6 +200,7 @@ body {
 .nav-item i {
     width: 18px;
     text-align: center;
+    flex-shrink: 0;
 }
 
 /* Use these classes in your JS icon generation */
@@ -194,6 +236,7 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1; /* Allows text to take available space */
+    min-width: 0;
 }
 
 .nav-item .badge {
@@ -262,6 +305,7 @@ body {
 /* --- MAIN CONTENT --- */
 .main-content {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     padding: 0;
@@ -420,6 +464,7 @@ body {
     color: #fff;
     border-radius: 4px;
     transition: background 0.2s;
+    min-width: 0;
 }
 
 .folder-header:hover {
@@ -430,6 +475,14 @@ body {
     width: 14px;
     text-align: center;
     color: #7c828d;
+    flex-shrink: 0;
+}
+
+.folder-header span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .folder-content {
@@ -452,7 +505,7 @@ body {
 /* --- LIST HEADER --- */
 .list-header {
     display: grid;
-    grid-template-columns: 1fr 140px 88px 124px 40px;
+    grid-template-columns: minmax(0, 1fr) 140px 88px 124px 40px;
     column-gap: 20px;
     padding: 8px 52px 6px 40px;
     font-size: 11px;
@@ -489,7 +542,7 @@ body {
     min-height: 48px;
     border-bottom: 1px solid var(--border);
     display: grid;
-    grid-template-columns: 1fr 140px 88px 124px 40px;
+    grid-template-columns: minmax(0, 1fr) 140px 88px 124px 40px;
     column-gap: 20px;
     align-items: center;
     transition: 0.1s;
@@ -522,6 +575,7 @@ body {
     align-items: center;
     gap: 16px;
     padding-left: 5px;
+    min-width: 0;
 }
 
 .subtask-toggle-btn {
@@ -551,6 +605,7 @@ body {
 .task-checkbox { 
     width: 18px; 
     height: 18px; 
+    flex-shrink: 0;
     cursor: pointer; 
     border: 1px solid #ccc;
     border-radius: 50%;
@@ -585,11 +640,16 @@ body {
     flex-shrink: 0; 
 }
 
+.task-name-col .dropdown {
+    flex-shrink: 0;
+}
+
 .task-text { 
     flex: 1; 
-    white-space: nowrap; 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     cursor: pointer; 
     color: #2a2e34; 
     font-weight: 400;
@@ -598,13 +658,44 @@ body {
     transition: background 0.2s;
 }
 
+.task-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+    color: #8f96a3;
+    font-size: 11px;
+}
+
+.task-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.task-meta-item.is-recurring {
+    color: var(--primary);
+}
+
 .task-text:hover {
     background: #f0f0f0;
 }
 
 .task-completed .task-text { 
-    text-decoration: line-through; 
     color: #b0b0b0; 
+}
+
+.task-completed .task-title { 
+    text-decoration: line-through; 
 }
 
 .task-edit-btn {
@@ -615,6 +706,7 @@ body {
     cursor: pointer;
     display: flex;
     align-items: center;
+    flex-shrink: 0;
     padding: 0;
 }
 
@@ -884,6 +976,9 @@ body {
 
 .dropdown.open .dropdown-menu {
     display: block;
+    position: fixed;
+    right: auto;
+    z-index: 1000;
 }
 
 .dropdown.open.open-above .dropdown-menu {
@@ -1262,6 +1357,17 @@ body {
     max-height: 180px;
     resize: none;
     overflow: hidden;
+}
+
+.checklist-summary {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    background: #f7f8fb;
+    border: 1px solid #eef1f5;
+    border-radius: 8px;
+    color: #5f6775;
+    font-size: 13px;
+    font-weight: 700;
 }
 
 .checklist-items-list {

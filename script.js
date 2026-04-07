@@ -55,6 +55,9 @@ const RECURRENCE_ORDINAL_LABELS = {
 const CLOUD_STORAGE_API_URL = 'https://sadhanas-api.di-guzmanc.workers.dev';
 const APP_STORAGE_KEY = 'stoa:data';
 const LOCAL_STORAGE_KEY = 'stoa:backup';
+const SIDEBAR_WIDTH_STORAGE_KEY = 'stoa:sidebar-width';
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 420;
 
 function createDefaultRecurrence(overrides = {}) {
     return {
@@ -264,6 +267,19 @@ function normalizeTaskLinks(links) {
         .filter(Boolean);
 }
 
+function hasTaskNotesContent(task) {
+    return !!(task?.description && task.description.trim()) ||
+        normalizeTaskLinks(task?.links).length > 0;
+}
+
+function getChecklistStats(task) {
+    const checklist = Array.isArray(task?.checklist) ? task.checklist : [];
+    return {
+        total: checklist.length,
+        completed: checklist.filter(item => item?.done).length
+    };
+}
+
 function escapeHtml(value) {
     return String(value)
         .replace(/&/g, '&amp;')
@@ -462,6 +478,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadData();
     updateOverdueBadge();
     renderSidebarDate();
+    setupSidebarResize();
     // Start on the Dashboard by default like ClickUp
     showDashboard(); 
     setupEventListeners();
@@ -476,6 +493,69 @@ function renderSidebarDate() {
         weekday: 'long',
         month: 'long',
         day: 'numeric'
+    });
+}
+
+function clampSidebarWidth(width) {
+    return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+}
+
+function applySidebarWidth(width) {
+    const sidebar = document.querySelector('.sidebar');
+    if (!sidebar) return;
+
+    sidebar.style.width = `${clampSidebarWidth(width)}px`;
+}
+
+function loadSavedSidebarWidth() {
+    try {
+        const savedWidth = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY), 10);
+        if (!Number.isNaN(savedWidth)) {
+            applySidebarWidth(savedWidth);
+        }
+    } catch (error) {
+        console.warn('Unable to load sidebar width.', error);
+    }
+}
+
+function saveSidebarWidth(width) {
+    try {
+        localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clampSidebarWidth(width)));
+    } catch (error) {
+        console.warn('Unable to save sidebar width.', error);
+    }
+}
+
+function setupSidebarResize() {
+    const handle = document.getElementById('sidebar-resize-handle');
+    const sidebar = document.querySelector('.sidebar');
+    if (!handle || !sidebar) return;
+
+    loadSavedSidebarWidth();
+
+    handle.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        document.body.classList.add('sidebar-resizing');
+        handle.setPointerCapture?.(event.pointerId);
+
+        const resizeSidebar = (moveEvent) => {
+            const nextWidth = clampSidebarWidth(moveEvent.clientX);
+            sidebar.style.width = `${nextWidth}px`;
+        };
+
+        const stopResizing = (upEvent) => {
+            const width = Math.round(sidebar.getBoundingClientRect().width);
+            saveSidebarWidth(width);
+            document.body.classList.remove('sidebar-resizing');
+            handle.releasePointerCapture?.(upEvent.pointerId);
+            window.removeEventListener('pointermove', resizeSidebar);
+            window.removeEventListener('pointerup', stopResizing);
+            window.removeEventListener('pointercancel', stopResizing);
+        };
+
+        window.addEventListener('pointermove', resizeSidebar);
+        window.addEventListener('pointerup', stopResizing);
+        window.addEventListener('pointercancel', stopResizing);
     });
 }
 
@@ -1765,10 +1845,16 @@ function autoResizeChecklistInput() {
 
 function renderChecklistItems() {
     const container = document.getElementById('checklist-items-container');
+    const summary = document.getElementById('checklist-summary');
     const task = getCurrentChecklistTask();
     if (!container || !task) return;
 
     const checklist = Array.isArray(task.checklist) ? task.checklist : [];
+    const checklistStats = getChecklistStats(task);
+    if (summary) {
+        summary.textContent = `${checklistStats.completed} of ${checklistStats.total} completed`;
+    }
+
     if (checklist.length === 0) {
         container.innerHTML = '<div class="checklist-empty">No checklist items yet.</div>';
         return;
@@ -1996,15 +2082,60 @@ function positionDropdownMenu(dropdown) {
 
     dropdown.classList.remove('open-above');
     const menu = dropdown.querySelector('.dropdown-menu');
-    if (!menu) return;
+    const toggle = dropdown.querySelector('.dropdown-toggle, [data-dropdown-trigger]');
+    if (!menu || !toggle) return;
 
-    const menuRect = menu.getBoundingClientRect();
-    const spacing = 8;
-    const shouldOpenAbove =
-        menuRect.bottom + spacing > window.innerHeight &&
-        menuRect.top > menuRect.height;
+    const spacing = 6;
+    menu.style.top = '';
+    menu.style.bottom = 'auto';
+    menu.style.left = '';
+    menu.style.right = 'auto';
+    menu.style.maxHeight = '';
+    menu.style.overflowY = '';
 
-    dropdown.classList.toggle('open-above', shouldOpenAbove);
+    const toggleRect = toggle.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth;
+    const menuHeight = menu.offsetHeight;
+    const menuLeft = Math.max(
+        spacing,
+        Math.min(toggleRect.left, window.innerWidth - menuWidth - spacing)
+    );
+    const spaceBelow = window.innerHeight - toggleRect.bottom - spacing;
+    const spaceAbove = toggleRect.top - spacing;
+    const shouldOpenAbove = menuHeight > spaceBelow && spaceAbove > spaceBelow;
+    const availableHeight = Math.max(120, shouldOpenAbove ? spaceAbove : spaceBelow);
+
+    menu.style.left = `${menuLeft}px`;
+    menu.style.maxHeight = `${availableHeight}px`;
+    menu.style.overflowY = 'auto';
+
+    if (shouldOpenAbove) {
+        dropdown.classList.add('open-above');
+        menu.style.top = `${Math.max(spacing, toggleRect.top - menuHeight - spacing)}px`;
+    } else {
+        menu.style.top = `${toggleRect.bottom + spacing}px`;
+    }
+}
+
+function closeDropdown(dropdown) {
+    if (!dropdown) return;
+
+    const menu = dropdown.querySelector('.dropdown-menu');
+    if (menu) {
+        menu.style.top = '';
+        menu.style.bottom = '';
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.style.maxHeight = '';
+        menu.style.overflowY = '';
+    }
+
+    dropdown.classList.remove('open');
+    dropdown.classList.remove('open-above');
+}
+
+function closeAllDropdowns() {
+    document.querySelectorAll('.dropdown.open').forEach(closeDropdown);
 }
 
 function handleDropdownClicks(e) {
@@ -2016,11 +2147,7 @@ function handleDropdownClicks(e) {
         const dropdown = toggle.closest('.dropdown');
         const isOpen = dropdown.classList.contains('open');
 
-        document.querySelectorAll('.dropdown.open')
-            .forEach(d => {
-                d.classList.remove('open');
-                d.classList.remove('open-above');
-            });
+        closeAllDropdowns();
 
         if (!isOpen) {
             dropdown.classList.add('open');
@@ -2038,24 +2165,18 @@ function handleDropdownClicks(e) {
 
         if (field === 'bulk-status') {
             bulkApplySelectedStatus(value);
-            dropdown.classList.remove('open');
-            dropdown.classList.remove('open-above');
+            closeDropdown(dropdown);
             return;
         }
 
         updateTaskProperty(taskId, field, value);
-        dropdown.classList.remove('open');
-        dropdown.classList.remove('open-above');
+        closeDropdown(dropdown);
         return;
     }
 
     // Click outside → close all
     if (!e.target.closest('.dropdown')) {
-        document.querySelectorAll('.dropdown.open')
-            .forEach(d => {
-                d.classList.remove('open');
-                d.classList.remove('open-above');
-            });
+        closeAllDropdowns();
     }
 }
 
@@ -2363,12 +2484,29 @@ function createTaskRow(task) {
 
     const recurrenceSummary = getRecurrenceSummary(task.recurrence, task.dueDate, task);
     const recurrenceIcon = isRecurringTask(task)
-        ? `<i class="fa-solid fa-arrows-rotate"
-             title="${recurrenceSummary}"
-             style="margin-left:8px; font-size:10px; color:var(--primary);"></i>`
+        ? `<span class="task-meta-item is-recurring" title="${escapeHtml(recurrenceSummary)}">
+                <i class="fa-solid fa-arrows-rotate"></i>
+           </span>`
         : '';
-    const hasNotes = !!(task.description && task.description.trim());
+    const hasNotes = hasTaskNotesContent(task);
     const hasChecklistItems = Array.isArray(task.checklist) && task.checklist.length > 0;
+    const subtaskCount = subtasks.length;
+    const checklistStats = getChecklistStats(task);
+    const subtaskCountHtml = subtaskCount > 0
+        ? `<span class="task-meta-item" title="${subtaskCount} subtask${subtaskCount === 1 ? '' : 's'}">
+                <i class="fa-solid fa-code-branch"></i>
+                <span>${subtaskCount}</span>
+           </span>`
+        : '';
+    const checklistCountHtml = checklistStats.total > 0
+        ? `<span class="task-meta-item" title="${checklistStats.completed} of ${checklistStats.total} checklist items completed">
+                <i class="fa-solid fa-list-check"></i>
+                <span>${checklistStats.completed}/${checklistStats.total}</span>
+           </span>`
+        : '';
+    const taskMetaHtml = recurrenceIcon || subtaskCountHtml || checklistCountHtml
+        ? `<span class="task-meta">${recurrenceIcon}${subtaskCountHtml}${checklistCountHtml}</span>`
+        : '';
     taskDiv.innerHTML = `
         <div class="task-name-col">
             ${subtaskToggleHtml}
@@ -2384,8 +2522,8 @@ function createTaskRow(task) {
             ${renderStatusDropdown(task)}
 
             <span class="task-text" onclick="editTaskText('${task.id}')">
-                ${task.text}
-                ${recurrenceIcon}
+                <span class="task-title">${escapeHtml(task.text)}</span>
+                ${taskMetaHtml}
             </span>
 
             <button class="task-edit-btn" onclick="openModal('${task.id}')">
