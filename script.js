@@ -25,6 +25,13 @@ let bulkSelection = new Set();
 let pendingDialogResolver = null;
 let activeDialogOptions = null;
 let recurrenceDraft = createDefaultRecurrence();
+let sidebarDrag = null;
+let sidebarEditMode = false;
+let notesDrag = null;
+let notesEditMode = false;
+let activeNoteId = null;
+let noteSaveTimer = null;
+let activeDashboardTab = 'day';
 
 const RECURRENCE_WEEKDAY_ORDER = ['1', '2', '3', '4', '5', '6', '0'];
 const RECURRENCE_WEEKDAY_SHORT = {
@@ -574,10 +581,6 @@ function setupEventListeners() {
         });
         if (name) createList(name);
     });
-    document.getElementById('export-data-btn').addEventListener('click', exportData);
-    document.getElementById('import-data-btn').addEventListener('click', () => {
-        document.getElementById('import-file-input').click();
-    });
     document.getElementById('import-file-input').addEventListener('change', handleImportFile);
 
     document.getElementById('close-modal-btn').addEventListener('click', closeModal);
@@ -738,6 +741,47 @@ function showPromptModal({
     });
 }
 
+function showPickerModal({ title, items, allowNone = false, noneLabel = 'None (standalone)' }) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.style.zIndex = '2000';
+
+        const noneHtml = allowNone
+            ? `<div class="picker-option picker-none" data-id="__none__"><i class="fa-solid fa-xmark"></i><span>${noneLabel}</span></div>`
+            : '';
+        const itemsHtml = items.map(item =>
+            `<div class="picker-option" data-id="${item.id}"><i class="fa-solid fa-${item.icon || 'list-ul'}"></i><span>${item.name}</span></div>`
+        ).join('');
+
+        overlay.innerHTML = `
+            <div class="modal-content" style="min-width:300px;max-width:380px;">
+                <div class="modal-header">
+                    <h3 style="font-size:1.1rem;font-weight:600;">${title}</h3>
+                </div>
+                <div class="modal-body" style="padding:12px;display:flex;flex-direction:column;gap:6px;">
+                    ${noneHtml}${itemsHtml}
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary picker-cancel-btn">Cancel</button>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+
+        function close(result) {
+            document.body.removeChild(overlay);
+            resolve(result);
+        }
+
+        overlay.querySelectorAll('.picker-option').forEach(el => {
+            el.addEventListener('click', () => close(el.dataset.id === '__none__' ? null : el.dataset.id));
+        });
+        overlay.querySelector('.picker-cancel-btn').addEventListener('click', () => close(undefined));
+        overlay.addEventListener('click', e => { if (e.target === overlay) close(undefined); });
+    });
+}
+
 // --- SMART DATE FORMATTING ---
 
 function formatDate(dateString) {
@@ -783,7 +827,9 @@ function getDefaultAppData() {
         folders: [],
         lists: [],
         activeListId: 'dashboard',
-        tasks: []
+        tasks: [],
+        notes: [],
+        trash: []
     };
 }
 
@@ -860,6 +906,8 @@ function normalizeImportedData(data) {
     normalized.tasks = Array.isArray(data.tasks)
         ? data.tasks.map(task => normalizeTask(task))
         : [];
+    normalized.notes = Array.isArray(data.notes) ? data.notes : [];
+    normalized.trash = Array.isArray(data.trash) ? data.trash : [];
 
     if (data.activeListId === 'dashboard') {
         normalized.activeListId = 'dashboard';
@@ -932,6 +980,7 @@ function handleImportFile(event) {
                 }
             }
 
+            closeBackupsModal();
             await showAlertModal({
                 title: 'Import Complete',
                 message: 'Backup imported successfully.'
@@ -1145,7 +1194,7 @@ function toggleTaskComplete(taskId) {
                 dueDate: formatDateInputValue(nextDate),
                 createdAt: new Date().toISOString(),
                 checklist: Array.isArray(task.checklist)
-                    ? task.checklist.map(item => ({ ...item }))
+                    ? task.checklist.map(item => ({ ...item, done: false }))
                     : [],
                 subtasks: Array.isArray(task.subtasks)
                     ? task.subtasks.map(subtask => ({ ...subtask, done: false }))
@@ -1936,9 +1985,12 @@ function saveChecklistModal() {
 function switchList(listId) {
     appData.activeListId = listId;
     
+    flushNoteSave();
     // UI Updates: Show task input, hide dashboard tabs
     document.getElementById('task-input-section').classList.remove('hidden');
     document.getElementById('dashboard-tabs').classList.add('hidden');
+    document.getElementById('notes-container').classList.add('hidden');
+    document.getElementById('tasks-container').classList.remove('hidden');
     document.getElementById('nav-home').classList.remove('active');
     document.querySelector('.top-bar')?.classList.remove('dashboard-home');
 
@@ -2182,6 +2234,20 @@ function handleDropdownClicks(e) {
 
 // --- LIST RENDERING ---
 
+function toggleSidebarEditMode() {
+    sidebarEditMode = !sidebarEditMode;
+    const btn = document.getElementById('sidebar-edit-btn');
+    if (btn) btn.classList.toggle('active', sidebarEditMode);
+    renderLists();
+}
+
+function toggleNotesEditMode() {
+    notesEditMode = !notesEditMode;
+    const btn = document.getElementById('notes-edit-btn');
+    if (btn) btn.classList.toggle('active', notesEditMode);
+    renderNotesList();
+}
+
 function renderLists() {
     const container = document.getElementById('list-container');
     if (!container) return;
@@ -2191,13 +2257,21 @@ function renderLists() {
     if (appData.folders) {
         appData.folders.forEach(folder => {
             const folderDiv = document.createElement('div');
-            folderDiv.className = `folder-wrapper ${folder.isOpen ? 'open' : ''}`;
-            
-folderDiv.innerHTML = `
-    <div class="folder-header" 
-         onclick="toggleFolder('${folder.id}')" 
-         oncontextmenu="handleContextMenu(event, 'folder', '${folder.id}')">
-        <i class="fa-solid fa-chevron-${folder.isOpen ? 'down' : 'right'}"></i>
+            folderDiv.className = `folder-wrapper ${folder.isOpen ? 'open' : ''} ${sidebarEditMode ? 'sidebar-edit-mode' : ''}`;
+            if (sidebarEditMode) {
+                folderDiv.draggable = true;
+                folderDiv.addEventListener('dragstart', e => handleSidebarDragStart(e, 'folder', folder.id));
+                folderDiv.addEventListener('dragend', e => handleSidebarDragEnd(e));
+            }
+            folderDiv.addEventListener('dragover', e => handleSidebarDragOver(e, 'folder', folder.id));
+            folderDiv.addEventListener('dragleave', e => handleSidebarDragLeave(e));
+            folderDiv.addEventListener('drop', e => handleSidebarDrop(e, 'folder', folder.id));
+
+            folderDiv.innerHTML = `
+                <div class="folder-header"
+                     onclick="${sidebarEditMode ? '' : `toggleFolder('${folder.id}')`}"
+                     oncontextmenu="handleContextMenu(event, 'folder', '${folder.id}')">
+                    <i class="fa-solid fa-chevron-${folder.isOpen ? 'down' : 'right'}"></i>
                     <span>${folder.name}</span>
                 </div>
                 <div class="folder-content">
@@ -2224,14 +2298,17 @@ folderDiv.innerHTML = `
 function generateListHtml(list) {
     const isActive = appData.activeListId === list.id ? 'active' : '';
     
+    const editAttrs = sidebarEditMode
+        ? `draggable="true" ondragstart="handleSidebarDragStart(event,'list','${list.id}')" ondragend="handleSidebarDragEnd(event)"`
+        : '';
     return `
-        <div class="nav-item ${isActive}" 
-             onclick="switchList('${list.id}')"
+        <div class="nav-item ${isActive} ${sidebarEditMode ? 'sidebar-edit-mode' : ''}"
+             ${editAttrs}
+             onclick="${sidebarEditMode ? '' : `switchList('${list.id}')`}"
              oncontextmenu="handleContextMenu(event, 'list', '${list.id}')"
-             ondragover="event.preventDefault()" 
-             ondragenter="this.style.background='rgba(255,255,255,0.2)'"
-             ondragleave="this.style.background=''"
-             ondrop="this.style.background=''; handleDrop(event, '${list.id}')">
+             ondragover="handleSidebarDragOver(event, 'list', '${list.id}')"
+             ondragleave="handleSidebarDragLeave(event)"
+             ondrop="handleSidebarDrop(event, 'list', '${list.id}')">
             <div style="display: flex; align-items: center; gap: 10px;">
                 <i class="fa-solid fa-list-ul"></i> <span>${list.name}</span>
             </div>
@@ -2244,43 +2321,19 @@ async function moveListToFolder(listId) {
     if (!list) return;
 
     if (!appData.folders || appData.folders.length === 0) {
-        await showAlertModal({
-            title: 'No Folders',
-            message: 'Create a folder first!'
-        });
+        await showAlertModal({ title: 'No Folders', message: 'Create a folder first!' });
         return;
     }
 
-    // Prepare a list of folders for the prompt
-    const folderOptions = appData.folders.map((f, i) => `${i + 1}. ${f.name}`).join('\n');
-    const choice = await showPromptModal({
-        title: 'Move to Folder',
-        message:
-            `Move "${list.name}" to which folder?\n\n` +
-            `${folderOptions}\n` +
-            `0. None (Make standalone)\n\n` +
-            `Enter the number:`,
-        confirmText: 'Move',
-        inputPlaceholder: 'Folder number'
+    const chosen = await showPickerModal({
+        title: `Move "${list.name}" to Folder`,
+        items: appData.folders.map(f => ({ id: f.id, name: f.name, icon: 'folder' })),
+        allowNone: true,
+        noneLabel: 'None (make standalone)'
     });
 
-    if (choice === null) return; // User cancelled
-
-    if (choice === '0') {
-        list.folderId = null;
-    } else {
-        const index = parseInt(choice) - 1;
-        if (appData.folders[index]) {
-            list.folderId = appData.folders[index].id;
-        } else {
-            await showAlertModal({
-                title: 'Invalid Selection',
-                message: 'Invalid selection.'
-            });
-            return;
-        }
-    }
-
+    if (chosen === undefined) return;
+    list.folderId = chosen;
     saveData();
     renderLists();
 }
@@ -2323,15 +2376,16 @@ async function createFolder() {
 async function deleteList(listId) {
     const shouldDelete = await showConfirmModal({
         title: 'Delete List',
-        message: 'Delete this list and all its tasks?',
+        message: 'Move this list and all its tasks to trash?',
         confirmText: 'Delete'
     });
     if (!shouldDelete) return;
 
-    // Remove all tasks that belong to this list
-    appData.tasks = appData.tasks.filter(t => t.listId !== listId);
+    const list = appData.lists.find(l => l.id === listId);
+    if (list) trashItem('list', list);
+    appData.tasks.filter(t => t.listId === listId).forEach(t => trashItem('task', t));
 
-    // Remove the list itself
+    appData.tasks = appData.tasks.filter(t => t.listId !== listId);
     appData.lists = appData.lists.filter(l => l.id !== listId);
 
     // If we were on this list, pick a new active list or go to dashboard
@@ -2456,10 +2510,6 @@ function createTaskRow(task) {
 
     taskDiv.className = `task-item ${isDone ? 'task-completed' : ''} ${isBulkSelected ? 'task-selected' : ''}`;
     taskDiv.setAttribute('data-id', task.id);
-
-    // Make row draggable
-    taskDiv.draggable = true;
-    taskDiv.ondragstart = (e) => handleDragStart(e, task.id);
 
     const dateText = formatDate(task.dueDate);
 
@@ -2675,16 +2725,14 @@ async function bulkDeleteSelectedTasks() {
     const count = bulkSelection.size;
     const shouldDelete = await showConfirmModal({
         title: 'Delete Tasks',
-        message: `Delete ${count} selected task${count === 1 ? '' : 's'}?`,
+        message: `Move ${count} selected task${count === 1 ? '' : 's'} to trash?`,
         confirmText: 'Delete'
     });
-    if (!shouldDelete) {
-        return;
-    }
+    if (!shouldDelete) return;
 
+    appData.tasks.filter(t => bulkSelection.has(t.id)).forEach(t => trashItem('task', t));
     appData.tasks = appData.tasks.filter(t => !bulkSelection.has(t.id));
     saveData();
-
     clearBulkSelection();
     refreshView();
 }
@@ -2694,36 +2742,19 @@ async function bulkMoveSelectedTasks() {
 
     const availableLists = appData.lists.filter(l => l.id !== appData.activeListId);
     if (availableLists.length === 0) {
-        await showAlertModal({
-            title: 'No Other Lists',
-            message: 'Create another list first to move selected tasks.'
-        });
+        await showAlertModal({ title: 'No Other Lists', message: 'Create another list first to move selected tasks.' });
         return;
     }
 
-    const listOptions = availableLists.map((list, index) => `${index + 1}. ${list.name}`).join('\n');
-    const choice = await showPromptModal({
-        title: 'Move Selected Tasks',
-        message: `Choose a destination list:\n\n${listOptions}`,
-        confirmText: 'Move',
-        inputPlaceholder: 'List number'
+    const chosen = await showPickerModal({
+        title: 'Move to List',
+        items: availableLists.map(l => ({ id: l.id, name: l.name, icon: 'list-ul' }))
     });
 
-    if (choice === null) return;
-
-    const selectedList = availableLists[parseInt(choice, 10) - 1];
-    if (!selectedList) {
-        await showAlertModal({
-            title: 'Invalid Selection',
-            message: 'Please enter a valid list number.'
-        });
-        return;
-    }
+    if (!chosen) return;
 
     appData.tasks.forEach(task => {
-        if (bulkSelection.has(task.id)) {
-            task.listId = selectedList.id;
-        }
+        if (bulkSelection.has(task.id)) task.listId = chosen;
     });
 
     saveData();
@@ -2871,19 +2902,170 @@ function toggleBulkSelectForSection(sectionKey) {
 }
 
 
+// --- TRASH & BACKUPS ---
+
+function trashItem(type, data) {
+    if (!appData.trash) appData.trash = [];
+    appData.trash.unshift({
+        id: 'tr-' + Date.now() + '-' + Math.random().toString(36).slice(2),
+        type,
+        data: JSON.parse(JSON.stringify(data)),
+        deletedAt: new Date().toISOString()
+    });
+}
+
+function cleanupTrash() {
+    if (!appData.trash) return;
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    appData.trash = appData.trash.filter(item => new Date(item.deletedAt).getTime() > cutoff);
+}
+
+function openTrashModal() {
+    renderTrashModal();
+    document.getElementById('trash-modal').classList.remove('hidden');
+}
+
+function closeTrashModal() {
+    document.getElementById('trash-modal').classList.add('hidden');
+}
+
+function openBackupsModal() {
+    document.getElementById('backups-modal').classList.remove('hidden');
+}
+
+function closeBackupsModal() {
+    document.getElementById('backups-modal').classList.add('hidden');
+}
+
+function renderTrashModal() {
+    const body = document.getElementById('trash-modal-body');
+    const emptyBtn = document.getElementById('empty-trash-btn');
+    const trash = appData.trash || [];
+
+    if (trash.length === 0) {
+        body.innerHTML = '<div class="trash-empty-state"><i class="fa-solid fa-trash"></i><p>Trash is empty</p></div>';
+        emptyBtn.disabled = true;
+        return;
+    }
+
+    emptyBtn.disabled = false;
+
+    const groups = { task: [], note: [], list: [], folder: [] };
+    trash.forEach(item => { if (groups[item.type]) groups[item.type].push(item); });
+
+    const labels = { task: 'Tasks', note: 'Notes', list: 'Lists', folder: 'Folders' };
+    const icons  = { task: 'fa-check', note: 'fa-note-sticky', list: 'fa-list-ul', folder: 'fa-folder' };
+
+    const now = Date.now();
+    let html = '';
+    for (const [type, items] of Object.entries(groups)) {
+        if (!items.length) continue;
+        html += `<div class="trash-group">
+            <div class="trash-group-label"><i class="fa-solid ${icons[type]}"></i> ${labels[type]}</div>
+            ${items.map(item => {
+                const name = item.data.text || item.data.title || item.data.name || 'Untitled';
+                const deleted = new Date(item.deletedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const daysLeft = Math.max(0, Math.ceil((new Date(item.deletedAt).getTime() + 30*24*60*60*1000 - now) / 86400000));
+                return `<div class="trash-item">
+                    <div class="trash-item-info">
+                        <span class="trash-item-name">${name}</span>
+                        <span class="trash-item-meta">Deleted ${deleted} · ${daysLeft}d left</span>
+                    </div>
+                    <div class="trash-item-actions">
+                        <button class="trash-restore-btn" onclick="restoreTrashItem('${item.id}')">
+                            <i class="fa-solid fa-rotate-left"></i> Restore
+                        </button>
+                        <button class="trash-perm-btn" onclick="permanentDeleteTrashItem('${item.id}')" title="Delete permanently">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    }
+    body.innerHTML = html;
+}
+
+function restoreTrashItem(trashId) {
+    const item = (appData.trash || []).find(t => t.id === trashId);
+    if (!item) return;
+
+    if (item.type === 'task') {
+        const listExists = appData.lists.some(l => l.id === item.data.listId);
+        if (!listExists) {
+            if (appData.lists.length === 0) {
+                showAlertModal({ title: 'Cannot Restore', message: 'No lists exist to restore this task into. Create a list first.' });
+                return;
+            }
+            item.data.listId = appData.lists[0].id;
+        }
+        appData.tasks.push(item.data);
+
+    } else if (item.type === 'note') {
+        if (!appData.notes) appData.notes = [];
+        appData.notes.unshift(item.data);
+
+    } else if (item.type === 'list') {
+        item.data.folderId = null;
+        appData.lists.push(item.data);
+        // Also restore tasks that belonged to this list
+        const listId = item.data.id;
+        const relatedTasks = (appData.trash || []).filter(t => t.type === 'task' && t.data.listId === listId);
+        relatedTasks.forEach(t => appData.tasks.push(t.data));
+        const restoredIds = new Set(relatedTasks.map(t => t.id));
+        appData.trash = (appData.trash || []).filter(t => !restoredIds.has(t.id));
+
+    } else if (item.type === 'folder') {
+        appData.folders.push(item.data);
+    }
+
+    appData.trash = (appData.trash || []).filter(t => t.id !== trashId);
+    saveData();
+    renderLists();
+    renderTrashModal();
+    refreshView();
+}
+
+async function permanentDeleteTrashItem(trashId) {
+    const confirmed = await showConfirmModal({
+        title: 'Permanently Delete',
+        message: 'This item will be gone forever. Continue?',
+        confirmText: 'Delete forever'
+    });
+    if (!confirmed) return;
+    appData.trash = (appData.trash || []).filter(t => t.id !== trashId);
+    saveData();
+    renderTrashModal();
+}
+
+async function emptyTrash() {
+    const trash = appData.trash || [];
+    if (!trash.length) return;
+    const confirmed = await showConfirmModal({
+        title: 'Empty Trash',
+        message: `Permanently delete all ${trash.length} item${trash.length === 1 ? '' : 's'}? This cannot be undone.`,
+        confirmText: 'Empty Trash'
+    });
+    if (!confirmed) return;
+    appData.trash = [];
+    saveData();
+    renderTrashModal();
+}
+
 // --- DELETE + STORAGE ---
 
 async function deleteTask(taskId) {
     const shouldDelete = await showConfirmModal({
         title: 'Delete Task',
-        message: 'Delete this task?',
+        message: 'Move this task to trash?',
         confirmText: 'Delete'
     });
     if (!shouldDelete) return;
 
+    const task = appData.tasks.find(t => t.id === taskId);
+    if (task) trashItem('task', task);
     appData.tasks = appData.tasks.filter(t => t.id !== taskId);
 
-    // If it was part of a bulk selection, keep things in sync
     if (bulkSelection && bulkSelection.has(taskId)) {
         bulkSelection.delete(taskId);
         updateBulkActionsBar();
@@ -2905,9 +3087,11 @@ function saveData() {
 // Create this helper to refresh whatever view is currently active
 function refreshView() {
     if (appData.activeListId === 'dashboard') {
-        // Find which tab is active (Day or Week)
-        const activeTab = document.querySelector('.tab-btn.active').innerText.toLowerCase();
-        renderDashboard(activeTab);
+        if (activeDashboardTab === 'notes') {
+            renderNotesList();
+        } else {
+            renderDashboard(activeDashboardTab);
+        }
     } else {
         renderTasks();
     }
@@ -2916,6 +3100,9 @@ function refreshView() {
 
 async function loadData() {
     appData = await loadAppData();
+    if (!appData.trash) appData.trash = [];
+    if (!appData.notes) appData.notes = [];
+    cleanupTrash();
 }
 
 // --- TIME HELPERS ---
@@ -2992,29 +3179,269 @@ function editTaskText(taskId) {
     input.focus();
 }
 
-function handleDragStart(event, taskId) {
-    event.dataTransfer.setData("taskId", taskId);
-    // Visual feedback: make the row slightly transparent while dragging
-    event.target.style.opacity = "0.4";
-    
-    // Reset opacity after a short delay so the "ghost" image isn't transparent
-    setTimeout(() => { event.target.style.opacity = "1"; }, 0);
+function handleSidebarDragStart(e, type, id) {
+    sidebarDrag = { type, id };
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.classList.add('sidebar-dragging');
 }
 
-function handleDrop(event, targetListId) {
-    event.preventDefault();
-    const taskId = event.dataTransfer.getData("taskId");
-    
-    const task = appData.tasks.find(t => t.id === taskId);
-    if (task && task.listId !== targetListId) {
-        task.listId = targetListId;
-        saveData();
-        refreshView(); // Refresh the current list view
-        renderLists(); // Update the counts in the sidebar
+function handleSidebarDragEnd(e) {
+    e.currentTarget.classList.remove('sidebar-dragging');
+    sidebarDrag = null;
+}
+
+function handleSidebarDragOver(e, type, id) {
+    if (!sidebarDrag || sidebarDrag.type !== type || sidebarDrag.id === id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.add('sidebar-drag-over');
+}
+
+function handleSidebarDragLeave(e) {
+    e.currentTarget.classList.remove('sidebar-drag-over');
+}
+
+function handleSidebarDrop(e, type, id) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('sidebar-drag-over');
+    if (!sidebarDrag || sidebarDrag.type !== type || sidebarDrag.id === id) {
+        sidebarDrag = null;
+        return;
     }
+
+    if (type === 'folder') {
+        const fromIdx = appData.folders.findIndex(f => f.id === sidebarDrag.id);
+        const toIdx = appData.folders.findIndex(f => f.id === id);
+        if (fromIdx !== -1 && toIdx !== -1) {
+            const [moved] = appData.folders.splice(fromIdx, 1);
+            appData.folders.splice(toIdx, 0, moved);
+            saveData();
+            renderLists();
+        }
+    } else if (type === 'list') {
+        const fromIdx = appData.lists.findIndex(l => l.id === sidebarDrag.id);
+        const toIdx = appData.lists.findIndex(l => l.id === id);
+        const fromList = appData.lists[fromIdx];
+        const toList = appData.lists[toIdx];
+        if (fromIdx !== -1 && toIdx !== -1 && fromList && toList && fromList.folderId === toList.folderId) {
+            const [moved] = appData.lists.splice(fromIdx, 1);
+            appData.lists.splice(toIdx, 0, moved);
+            saveData();
+            renderLists();
+        }
+    }
+    sidebarDrag = null;
+}
+
+function handleNotesDragStart(e, id) {
+    notesDrag = id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.classList.add('notes-dragging');
+}
+
+function handleNotesDragEnd(e) {
+    e.currentTarget.classList.remove('notes-dragging');
+    notesDrag = null;
+}
+
+function handleNotesDragOver(e, id) {
+    if (!notesDrag || notesDrag === id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.add('notes-drag-over');
+}
+
+function handleNotesDragLeave(e) {
+    e.currentTarget.classList.remove('notes-drag-over');
+}
+
+function handleNotesDrop(e, id) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('notes-drag-over');
+    if (!notesDrag || notesDrag === id) { notesDrag = null; return; }
+    const notes = appData.notes || [];
+    const fromIdx = notes.findIndex(n => n.id === notesDrag);
+    const toIdx = notes.findIndex(n => n.id === id);
+    if (fromIdx !== -1 && toIdx !== -1) {
+        const [item] = notes.splice(fromIdx, 1);
+        notes.splice(toIdx, 0, item);
+        appData.notes = notes;
+        saveData();
+        renderNotesList();
+    }
+    notesDrag = null;
 }
 
 // --- DASHBOARD LOGIC ---
+
+// --- NOTES ---
+
+function renderNotesTab() {
+    flushNoteSave();
+    activeDashboardTab = 'notes';
+
+    document.getElementById('tasks-container').classList.add('hidden');
+    document.getElementById('notes-container').classList.remove('hidden');
+
+    document.getElementById('tab-day').classList.remove('active');
+    document.getElementById('tab-tomorrow').classList.remove('active');
+    document.getElementById('tab-week').classList.remove('active');
+    document.getElementById('tab-notes').classList.add('active');
+
+    renderNotesList();
+    if (activeNoteId) selectNote(activeNoteId);
+}
+
+function renderNotesList() {
+    const listEl = document.getElementById('notes-list');
+    if (!listEl) return;
+    const notes = appData.notes || [];
+
+    if (notes.length === 0) {
+        listEl.innerHTML = '<div class="notes-list-empty">No notes yet</div>';
+        return;
+    }
+
+    listEl.innerHTML = notes.map(note => {
+        const folder = note.folderId ? (appData.folders || []).find(f => f.id === note.folderId) : null;
+        const plain = (note.content || '').replace(/<[^>]+>/g, '').trim();
+        const preview = plain.slice(0, 90);
+        const isActive = note.id === activeNoteId ? 'active' : '';
+        const editAttrs = notesEditMode
+            ? `draggable="true" ondragstart="handleNotesDragStart(event,'${note.id}')" ondragend="handleNotesDragEnd(event)"`
+            : `onclick="selectNote('${note.id}')"`;
+        return `
+            <div class="note-card ${isActive} ${notesEditMode ? 'notes-edit-mode' : ''}"
+                 ${editAttrs}
+                 ondragover="handleNotesDragOver(event,'${note.id}')"
+                 ondragleave="handleNotesDragLeave(event)"
+                 ondrop="handleNotesDrop(event,'${note.id}')">
+                <div class="note-card-title">${note.title || 'Untitled'}</div>
+                ${preview ? `<div class="note-card-preview">${preview}</div>` : ''}
+                ${folder ? `<span class="note-folder-badge">${folder.name}</span>` : ''}
+            </div>`;
+    }).join('');
+}
+
+function selectNote(id) {
+    flushNoteSave();
+    activeNoteId = id;
+    const note = (appData.notes || []).find(n => n.id === id);
+    if (!note) return;
+
+    renderNotesList();
+
+    document.getElementById('notes-empty-state').classList.add('hidden');
+    document.getElementById('notes-editor').classList.remove('hidden');
+
+    document.getElementById('note-title-input').value = note.title || '';
+    document.getElementById('note-content').innerHTML = note.content || '';
+
+    const folder = note.folderId ? (appData.folders || []).find(f => f.id === note.folderId) : null;
+    document.getElementById('note-folder-label').textContent = folder ? folder.name : 'No folder';
+}
+
+function createNote() {
+    flushNoteSave();
+    if (!appData.notes) appData.notes = [];
+    const note = {
+        id: 'n' + Date.now(),
+        title: '',
+        content: '',
+        folderId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+    appData.notes.unshift(note);
+    saveData();
+    activeNoteId = note.id;
+    renderNotesList();
+    document.getElementById('notes-empty-state').classList.add('hidden');
+    document.getElementById('notes-editor').classList.remove('hidden');
+    document.getElementById('note-title-input').value = '';
+    document.getElementById('note-content').innerHTML = '';
+    document.getElementById('note-folder-label').textContent = 'No folder';
+    document.getElementById('note-title-input').focus();
+}
+
+function scheduleNoteSave() {
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = setTimeout(flushNoteSave, 600);
+}
+
+function flushNoteSave() {
+    clearTimeout(noteSaveTimer);
+    if (!activeNoteId) return;
+    const note = (appData.notes || []).find(n => n.id === activeNoteId);
+    if (!note) return;
+    const titleEl = document.getElementById('note-title-input');
+    const contentEl = document.getElementById('note-content');
+    if (!titleEl || !contentEl) return;
+    note.title = titleEl.value.trim();
+    note.content = contentEl.innerHTML;
+    note.updatedAt = new Date().toISOString();
+    saveData();
+    renderNotesList();
+}
+
+async function changeNoteFolder() {
+    if (!activeNoteId) return;
+    const note = (appData.notes || []).find(n => n.id === activeNoteId);
+    if (!note) return;
+
+    if (!appData.folders || appData.folders.length === 0) {
+        await showAlertModal({ title: 'No Folders', message: 'Create a folder first to assign a label.' });
+        return;
+    }
+
+    const chosen = await showPickerModal({
+        title: 'Assign Folder Label',
+        items: appData.folders.map(f => ({ id: f.id, name: f.name, icon: 'folder' })),
+        allowNone: true,
+        noneLabel: 'No folder label'
+    });
+
+    if (chosen === undefined) return;
+    note.folderId = chosen;
+    note.updatedAt = new Date().toISOString();
+    saveData();
+    const folder = chosen ? (appData.folders || []).find(f => f.id === chosen) : null;
+    document.getElementById('note-folder-label').textContent = folder ? folder.name : 'No folder';
+    renderNotesList();
+}
+
+async function deleteNote() {
+    if (!activeNoteId) return;
+    const confirmed = await showConfirmModal({
+        title: 'Delete Note',
+        message: 'Move this note to trash?',
+        confirmText: 'Delete'
+    });
+    if (!confirmed) return;
+    const note = (appData.notes || []).find(n => n.id === activeNoteId);
+    if (note) trashItem('note', note);
+    appData.notes = (appData.notes || []).filter(n => n.id !== activeNoteId);
+    activeNoteId = null;
+    saveData();
+    renderNotesList();
+    document.getElementById('notes-empty-state').classList.remove('hidden');
+    document.getElementById('notes-editor').classList.add('hidden');
+}
+
+function applyNoteFormat(command, value = null) {
+    document.getElementById('note-content').focus();
+    document.execCommand(command, false, value);
+    scheduleNoteSave();
+}
+
+function handleNoteKeydown(e) {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        document.execCommand('insertHTML', false, '    ');
+    }
+}
 
 function showDashboard() {
     appData.activeListId = 'dashboard';
@@ -3033,12 +3460,19 @@ function showDashboard() {
 }
 
 function renderDashboard(viewType) {
+    flushNoteSave();
+    activeDashboardTab = viewType;
+
+    document.getElementById('tasks-container').classList.remove('hidden');
+    document.getElementById('notes-container').classList.add('hidden');
+
     const container = document.getElementById('tasks-container');
     container.innerHTML = '';
-    
+
     document.getElementById('tab-day').classList.toggle('active', viewType === 'day');
     document.getElementById('tab-tomorrow').classList.toggle('active', viewType === 'tomorrow');
     document.getElementById('tab-week').classList.toggle('active', viewType === 'week');
+    document.getElementById('tab-notes').classList.remove('active');
 
     // Local YYYY-MM-DD for "today"
     const now = new Date();
@@ -3279,13 +3713,10 @@ async function deleteItem() {
         });
         if (!shouldDelete) return;
 
-        // 1. Remove the folder
+        const folder = appData.folders.find(f => f.id === id);
+        if (folder) trashItem('folder', folder);
         appData.folders = appData.folders.filter(f => f.id !== id);
-
-        // 2. Move any lists inside this folder to "Standalone" (null folderId)
-        appData.lists.forEach(l => {
-            if (l.folderId === id) l.folderId = null;
-        });
+        appData.lists.forEach(l => { if (l.folderId === id) l.folderId = null; });
 
         saveData();
         renderLists();

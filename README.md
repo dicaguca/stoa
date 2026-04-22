@@ -1,2 +1,0 @@
-# stoa
-Stoa app

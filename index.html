@@ -29,7 +29,12 @@
 
             <div class="sidebar-divider"></div>
 
-            <div class="sidebar-label">Lists & Folders</div>
+            <div class="sidebar-label-row">
+                <span class="sidebar-label">Lists & Folders</span>
+                <button class="sidebar-edit-btn" id="sidebar-edit-btn" onclick="toggleSidebarEditMode()" title="Reorder lists and folders">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+            </div>
 
             <div class="sidebar-body">
                 <nav id="list-container"></nav>
@@ -45,11 +50,11 @@
                     </button>
                 </div>
                 <div class="sidebar-actions sidebar-actions-secondary">
-                    <button id="export-data-btn" class="sidebar-btn" style="flex: 1;">
-                        <i class="fa-solid fa-download"></i> Export
+                    <button class="sidebar-btn" style="flex: 1;" onclick="openTrashModal()">
+                        <i class="fa-solid fa-trash"></i> Trash
                     </button>
-                    <button id="import-data-btn" class="sidebar-btn" style="flex: 1;">
-                        <i class="fa-solid fa-upload"></i> Import
+                    <button class="sidebar-btn" style="flex: 1;" onclick="openBackupsModal()">
+                        <i class="fa-solid fa-database"></i> Backups
                     </button>
                 </div>
             </div>
@@ -67,6 +72,7 @@
                         <button class="tab-btn" id="tab-tomorrow"
                             onclick="renderDashboard('tomorrow')">Tomorrow</button>
                         <button class="tab-btn" id="tab-week" onclick="renderDashboard('week')">Week</button>
+                        <button class="tab-btn" id="tab-notes" onclick="renderNotesTab()">Notes</button>
                     </div>
                 </div>
 
@@ -140,6 +146,56 @@
             </div>
 
             <div id="tasks-container"></div>
+
+            <div id="notes-container" class="notes-layout hidden">
+                <div class="notes-sidebar">
+                    <div class="notes-sidebar-header">
+                        <button class="btn-primary notes-new-btn" onclick="createNote()">
+                            <i class="fa-solid fa-plus"></i> New Note
+                        </button>
+                        <button class="notes-edit-btn" id="notes-edit-btn" onclick="toggleNotesEditMode()" title="Reorder notes">
+                            <i class="fa-solid fa-pen-to-square"></i>
+                        </button>
+                    </div>
+                    <div id="notes-list" class="notes-list"></div>
+                </div>
+                <div class="notes-editor-panel">
+                    <div class="notes-empty-state" id="notes-empty-state">
+                        <i class="fa-solid fa-note-sticky"></i>
+                        <p>Select a note or create a new one</p>
+                    </div>
+                    <div class="notes-editor hidden" id="notes-editor">
+                        <div class="notes-editor-header">
+                            <input type="text" id="note-title-input" class="note-title-input"
+                                placeholder="Untitled note" oninput="scheduleNoteSave()">
+                            <button class="note-folder-btn" id="note-folder-btn"
+                                onclick="changeNoteFolder()" title="Assign folder label">
+                                <i class="fa-solid fa-tag"></i>
+                                <span id="note-folder-label">No folder</span>
+                            </button>
+                        </div>
+                        <div class="notes-toolbar">
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('bold')" title="Bold"><i class="fa-solid fa-bold"></i></button>
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('italic')" title="Italic"><i class="fa-solid fa-italic"></i></button>
+                            <span class="toolbar-divider"></span>
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('formatBlock','h1')" title="Heading 1">H1</button>
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('formatBlock','h2')" title="Heading 2">H2</button>
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('formatBlock','p')" title="Paragraph">¶</button>
+                            <span class="toolbar-divider"></span>
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('insertUnorderedList')" title="Bullet list"><i class="fa-solid fa-list-ul"></i></button>
+                            <button onmousedown="event.preventDefault()" onclick="applyNoteFormat('insertOrderedList')" title="Numbered list"><i class="fa-solid fa-list-ol"></i></button>
+                        </div>
+                        <div id="note-content" class="note-content" contenteditable="true"
+                            oninput="scheduleNoteSave()"
+                            onkeydown="handleNoteKeydown(event)"></div>
+                        <div class="notes-editor-footer">
+                            <button class="note-delete-btn" onclick="deleteNote()">
+                                <i class="fa-solid fa-trash"></i> Delete note
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
 
@@ -431,6 +487,54 @@
             <div class="modal-footer app-dialog-footer">
                 <button id="app-dialog-cancel" class="btn-secondary hidden">Cancel</button>
                 <button id="app-dialog-confirm" class="btn-primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backups Modal -->
+    <div id="backups-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeBackupsModal()">
+        <div class="modal-content" style="max-width:400px;">
+            <div class="modal-header">
+                <h3 style="font-size:1.1rem;font-weight:600;">Backups</h3>
+                <button onclick="closeBackupsModal()" style="border:none;background:none;cursor:pointer;color:#999;">
+                    <i class="fa-solid fa-times fa-lg"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="display:flex;flex-direction:column;gap:20px;">
+                <div class="backup-section">
+                    <div class="backup-section-title"><i class="fa-solid fa-download"></i> Export</div>
+                    <p class="backup-section-desc">Download a full backup of all your data as a JSON file.</p>
+                    <button class="btn-primary" onclick="exportData()">Download backup</button>
+                </div>
+                <div style="border-top:1px solid var(--border);"></div>
+                <div class="backup-section">
+                    <div class="backup-section-title"><i class="fa-solid fa-upload"></i> Import</div>
+                    <p class="backup-section-desc">Restore from a backup file. This will replace all current data.</p>
+                    <button class="btn-secondary" onclick="document.getElementById('import-file-input').click()">Choose file…</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeBackupsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trash Modal -->
+    <div id="trash-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeTrashModal()">
+        <div class="modal-content trash-modal-content">
+            <div class="modal-header">
+                <h3 style="font-size:1.1rem;font-weight:600;">Trash</h3>
+                <div style="display:flex;align-items:center;gap:14px;">
+                    <span class="trash-auto-note">Auto-deleted after 30 days</span>
+                    <button onclick="closeTrashModal()" style="border:none;background:none;cursor:pointer;color:#999;">
+                        <i class="fa-solid fa-times fa-lg"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body trash-modal-body" id="trash-modal-body"></div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeTrashModal()">Close</button>
+                <button class="btn-primary" id="empty-trash-btn" onclick="emptyTrash()">Empty Trash</button>
             </div>
         </div>
     </div>
