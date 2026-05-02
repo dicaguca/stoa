@@ -582,15 +582,11 @@ body.sidebar-resizing {
     transition: 0.1s;
     font-size: 15px;
     padding: 4px 0;
-    cursor: grab;
+    cursor: default;
 }
 
-.task-item:hover { 
-    background-color: #fafbfd; 
-}
-
-.task-item:active {
-    cursor: grabbing;
+.task-item:hover {
+    background-color: #fafbfd;
 }
 
 .task-item > div:nth-child(2) {
