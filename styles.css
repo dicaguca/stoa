@@ -1300,6 +1300,8 @@ body.sidebar-resizing {
     flex-direction: column;
     gap: 10px;
     min-height: 0;
+    flex: 1;
+    overflow-y: auto;
 }
 
 .task-link-empty {
