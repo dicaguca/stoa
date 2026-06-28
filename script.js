@@ -1091,6 +1091,9 @@ async function loadAppData() {
     const cloudPayload = await loadFromCloud(APP_STORAGE_KEY);
     const cloudData = normalizeStoredAppData(cloudPayload);
     if (cloudData) {
+        // Mirror to localStorage so other apps on the same origin (e.g. Stru)
+        // can read the latest data without waiting for a save event.
+        try { localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cloudData)); } catch {}
         return cloudData;
     }
 
