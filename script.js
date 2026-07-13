@@ -487,8 +487,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderSidebarDate();
     setupSidebarResize();
     // Start on the Dashboard by default like ClickUp
-    showDashboard(); 
+    showDashboard();
     setupEventListeners();
+    // Process any task completions queued by Stru (runs after UI is fully ready)
+    await processStruEvents();
 });
 
 function renderSidebarDate() {
@@ -3106,6 +3108,52 @@ async function loadData() {
     if (!appData.trash) appData.trash = [];
     if (!appData.notes) appData.notes = [];
     cleanupTrash();
+}
+
+// ── Stru events queue ─────────────────────────────────────────────────────────
+// Stru never writes to stoa:data. Instead it appends completion events to
+// stoa:events. Stoa processes them here after startup using its own
+// toggleTaskComplete() — recurrence, subtasks, and all task properties are
+// handled exactly as if the user completed the task in Stoa directly.
+
+async function processStruEvents() {
+    const url = getCloudStorageUrl('stoa:events');
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const events = await res.json();
+        if (!Array.isArray(events) || events.length === 0) return;
+
+        console.log('[Stoa] Processing', events.length, 'event(s) from Stru');
+
+        // Clear the queue first so events aren't reprocessed if Stoa is reopened
+        // before processing finishes. Any events arriving in the tiny window
+        // between our GET and this PUT are tolerable to replay.
+        await fetch(url, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify([]),
+        });
+
+        for (const event of events) {
+            if (event.type === 'completeTask') {
+                const task = appData.tasks.find(t => t.id === event.taskId);
+                if (task && task.status !== 'Done') {
+                    console.log('[Stoa] Completing task from Stru:', task.id, task.title || '');
+                    toggleTaskComplete(task.id);
+                }
+            } else if (event.type === 'uncompleteTask') {
+                const task = appData.tasks.find(t => t.id === event.taskId);
+                if (task && task.status === 'Done') {
+                    console.log('[Stoa] Un-completing task from Stru:', task.id, task.title || '');
+                    task.status = 'Active';
+                    saveData();
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[Stoa] Could not process Stru events:', e);
+    }
 }
 
 // --- TIME HELPERS ---
