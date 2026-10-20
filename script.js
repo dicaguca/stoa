@@ -3111,8 +3111,8 @@ async function loadData() {
 }
 
 // ── Stru events queue ─────────────────────────────────────────────────────────
-// Stru never writes to stoa:data. Instead it appends completion events to
-// stoa:events. Stoa processes them here after startup using its own
+// Stru never writes to stoa:data. Instead it appends task and subtask
+// completion events to stoa:events. Stoa processes them here after startup using its own
 // toggleTaskComplete() — recurrence, subtasks, and all task properties are
 // handled exactly as if the user completed the task in Stoa directly.
 
@@ -3149,8 +3149,22 @@ async function processStruEvents() {
                     task.status = 'Active';
                     saveData();
                 }
+            } else if (event.type === 'completeSubtask' || event.type === 'uncompleteSubtask') {
+                // Stru merges a task's subtasks and checklist into one list, so the
+                // item may live in either array. Unknown IDs (added in Stru) are ignored.
+                const task = appData.tasks.find(t => t.id === event.taskId);
+                if (!task) continue;
+                const done = event.type === 'completeSubtask';
+                const item = [...(task.subtasks || []), ...(task.checklist || [])]
+                    .find(entry => entry.id === event.subtaskId);
+                if (item && !!item.done !== done) {
+                    console.log('[Stoa]', done ? 'Completing' : 'Un-completing', 'subtask from Stru:', task.id, item.text || '');
+                    item.done = done;
+                    saveData();
+                }
             }
         }
+        refreshView();
     } catch (e) {
         console.warn('[Stoa] Could not process Stru events:', e);
     }
