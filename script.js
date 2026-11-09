@@ -3115,59 +3115,106 @@ async function loadData() {
 // completion events to stoa:events. Stoa processes them here after startup using its own
 // toggleTaskComplete() — recurrence, subtasks, and all task properties are
 // handled exactly as if the user completed the task in Stoa directly.
-
+//
+// Applying an event is idempotent (it sets an explicit state), so an event that
+// is delivered twice does no harm — but one that is lost can't be recovered.
+// The API stores each event under its own key (GET ?events lists them, with ids);
+// Stoa acknowledges only the ids it actually processed, so nothing appended in
+// the meantime can be wiped. The old single-array queue is still drained for
+// events queued before the API change.
 async function processStruEvents() {
     const url = getCloudStorageUrl('stoa:events');
+    // If Stoa's data didn't load, leave the queue alone: applying events to an
+    // empty task list would drop them, and saving would overwrite the real data.
+    if (!Array.isArray(appData?.tasks) || appData.tasks.length === 0) return;
     try {
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const events = await res.json();
-        if (!Array.isArray(events) || events.length === 0) return;
+        const legacyEvents = await fetchLegacyStruEvents(url);
+        const queued = await fetchQueuedStruEvents(url);
+        const events = [...legacyEvents, ...queued.map(q => q.event)];
+        if (events.length === 0) return;
 
         console.log('[Stoa] Processing', events.length, 'event(s) from Stru');
-
-        // Clear the queue first so events aren't reprocessed if Stoa is reopened
-        // before processing finishes. Any events arriving in the tiny window
-        // between our GET and this PUT are tolerable to replay.
-        await fetch(url, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify([]),
-        });
-
-        for (const event of events) {
-            if (event.type === 'completeTask') {
-                const task = appData.tasks.find(t => t.id === event.taskId);
-                if (task && task.status !== 'Done') {
-                    console.log('[Stoa] Completing task from Stru:', task.id, task.title || '');
-                    toggleTaskComplete(task.id);
-                }
-            } else if (event.type === 'uncompleteTask') {
-                const task = appData.tasks.find(t => t.id === event.taskId);
-                if (task && task.status === 'Done') {
-                    console.log('[Stoa] Un-completing task from Stru:', task.id, task.title || '');
-                    task.status = 'Active';
-                    saveData();
-                }
-            } else if (event.type === 'completeSubtask' || event.type === 'uncompleteSubtask') {
-                // Stru merges a task's subtasks and checklist into one list, so the
-                // item may live in either array. Unknown IDs (added in Stru) are ignored.
-                const task = appData.tasks.find(t => t.id === event.taskId);
-                if (!task) continue;
-                const done = event.type === 'completeSubtask';
-                const item = [...(task.subtasks || []), ...(task.checklist || [])]
-                    .find(entry => entry.id === event.subtaskId);
-                if (item && !!item.done !== done) {
-                    console.log('[Stoa]', done ? 'Completing' : 'Un-completing', 'subtask from Stru:', task.id, item.text || '');
-                    item.done = done;
-                    saveData();
-                }
-            }
-        }
+        const changed = applyStruEvents(events);
         refreshView();
+
+        // Only clear events once the result is safely in the cloud; if the save
+        // fails they stay queued and are re-applied next time.
+        if (changed > 0) {
+            const saved = await saveToCloud(APP_STORAGE_KEY, appData);
+            if (!saved) return;
+        }
+
+        if (legacyEvents.length > 0) {
+            await fetch(url, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify([]),
+            });
+        }
+        if (queued.length > 0) {
+            await fetch(url, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ op: 'ackEvents', ids: queued.map(q => q.id) }),
+            });
+        }
     } catch (e) {
         console.warn('[Stoa] Could not process Stru events:', e);
     }
+}
+
+async function fetchLegacyStruEvents(url) {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const events = await res.json();
+    return Array.isArray(events) ? events : [];
+}
+
+async function fetchQueuedStruEvents(url) {
+    const res = await fetch(`${url}?events`);
+    if (!res.ok) return [];
+    const body = await res.json();
+    // An API without per-key events ignores ?events and returns the legacy
+    // array, which fetchLegacyStruEvents already handled.
+    return body && Array.isArray(body.events) ? body.events : [];
+}
+
+// Returns how many events actually changed something.
+function applyStruEvents(events) {
+    let changed = 0;
+    for (const event of events) {
+        if (event.type === 'completeTask') {
+            const task = appData.tasks.find(t => t.id === event.taskId);
+            if (task && task.status !== 'Done') {
+                console.log('[Stoa] Completing task from Stru:', task.id, task.title || '');
+                toggleTaskComplete(task.id);
+                changed++;
+            }
+        } else if (event.type === 'uncompleteTask') {
+            const task = appData.tasks.find(t => t.id === event.taskId);
+            if (task && task.status === 'Done') {
+                console.log('[Stoa] Un-completing task from Stru:', task.id, task.title || '');
+                task.status = 'Active';
+                saveData();
+                changed++;
+            }
+        } else if (event.type === 'completeSubtask' || event.type === 'uncompleteSubtask') {
+            // Stru merges a task's subtasks and checklist into one list, so the
+            // item may live in either array. Unknown IDs (added in Stru) are ignored.
+            const task = appData.tasks.find(t => t.id === event.taskId);
+            if (!task) continue;
+            const done = event.type === 'completeSubtask';
+            const item = [...(task.subtasks || []), ...(task.checklist || [])]
+                .find(entry => entry.id === event.subtaskId);
+            if (item && !!item.done !== done) {
+                console.log('[Stoa]', done ? 'Completing' : 'Un-completing', 'subtask from Stru:', task.id, item.text || '');
+                item.done = done;
+                saveData();
+                changed++;
+            }
+        }
+    }
+    return changed;
 }
 
 // --- TIME HELPERS ---
