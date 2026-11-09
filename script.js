@@ -490,8 +490,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     showDashboard();
     setupEventListeners();
     // Process any task completions queued by Stru (runs after UI is fully ready)
-    await processStruEvents();
+    await checkStruEventsOnReturn();
+    // ...and again whenever the user comes back to this tab, so changes made
+    // in Stru show up without a reload.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') checkStruEventsOnReturn();
+    });
+    window.addEventListener('focus', checkStruEventsOnReturn);
 });
+
+const STRU_EVENTS_RECHECK_MS = 5000;
+let struEventsCheckRunning = false;
+let lastStruEventsCheck = 0;
+
+async function checkStruEventsOnReturn() {
+    // Shared by startup and tab-return. visibilitychange and focus usually
+    // fire together; run once, not twice, and never two checks at a time.
+    if (struEventsCheckRunning || Date.now() - lastStruEventsCheck < STRU_EVENTS_RECHECK_MS) return;
+    struEventsCheckRunning = true;
+    lastStruEventsCheck = Date.now();
+    try {
+        await processStruEvents();
+    } finally {
+        struEventsCheckRunning = false;
+    }
+}
 
 function renderSidebarDate() {
     const dateEl = document.getElementById('sidebar-today-date');
